@@ -34,3 +34,30 @@ outputs/
 # Environment / Dependency
 .envrc
 *.egg-info/
+
+# Deep Learning / AI
+runs/
+outputs/
+experiments/
+submission/
+*.csv
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# Video / Image Data
+datasets/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.png
+*.jpg
+*.jpeg
+
+# System / Cache
+__MACOSX/
+*.log
+*.tmp

@@ -1,0 +1,10 @@
+# configs/model_efficientnet_b4.yaml
+model:
+  name: "timm/efficientnet_b4"   # 입력 해상도 380 권장
+  num_labels: 2
+
+feature_extractor:
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
+  size: 380
+  crop_size: 380

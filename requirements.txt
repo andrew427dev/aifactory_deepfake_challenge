@@ -10,3 +10,5 @@ ffmpeg-python
 hydra-core
 matplotlib
 pyyaml
+timm
+facenet-pytorch
