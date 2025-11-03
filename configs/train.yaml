@@ -2,14 +2,18 @@
 seed: 42
 
 runtime:
-  device: auto  # auto, cuda, cpu 중 선택
-  amp: true     # true면 CUDA 환경에서 mixed precision 활성화
+  # auto: CUDA 가용 시 자동으로 선택, cpu/cuda 로 강제 지정 가능
+  device: auto
+  # true 인 경우 CUDA 환경에서 torch.cuda.amp 를 활용하여 혼합 정밀 학습 수행
+  amp: true
 
 paths:
   train_manifest: data/processed/train_manifest.csv   # 이미지/프레임 목록과 레이블이 매핑된 파일
   val_manifest: data/processed/val_manifest.csv       # 검증 세트 매니페스트
   output_dir: experiments/exp001                      # 체크포인트 및 로그 저장 위치
+  log_dir: experiments/exp001/logs                    # (선택) 로그 저장 디렉터리
 
+# Trainer 블록은 더미 루프와 향후 실제 학습 루프 모두에서 공유됩니다.
 trainer:
   epochs: 1
   dummy_steps: 1
@@ -17,11 +21,21 @@ trainer:
   precision: "amp"                                    # ['fp32', 'amp'] 중 선택
   clip_grad_norm: 1.0
   log_interval: 50
+  save_interval: 1                                     # (선택) 에폭 저장 주기
+
+# legacy 호환성을 위해 간단한 학습 파라미터를 중복 표기합니다.
+train_params:
+  batch_size: 32
+  num_workers: 8
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  epochs: 1
 
 optimizer:
   name: adamw
   lr: 5.0e-5
   weight_decay: 0.01
+  betas: [0.9, 0.999]
 
 scheduler:
   name: cosine
@@ -32,6 +46,7 @@ ema:
   enabled: false
   decay: 0.999
 
+# DataLoader 설정은 scripts/train.py 의 더미 학습과 향후 실제 DataModule 에서 그대로 활용됩니다.
 dataloader:
   train:
     batch_size: 32
