@@ -6,10 +6,10 @@ import logging
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-import cv2
 import numpy as np
 import pandas as pd
 import torch
+from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
 logger = logging.getLogger(__name__)
@@ -69,10 +69,8 @@ class ManifestImageDataset(Dataset):
             abs_path = self.root_dir / abs_path
         if not abs_path.exists():
             raise FileNotFoundError(f"Image not found: {abs_path}")
-        image = cv2.imread(str(abs_path), cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError(f"Failed to read image: {abs_path}")
-        return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        with Image.open(abs_path) as img:
+            return np.array(img.convert("RGB"))
 
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
         row = self.frame.iloc[index]
@@ -136,6 +134,7 @@ class RandomImageDataset(Dataset):
                 pixel_values = torch.rand(3, self.image_size, self.image_size, generator=self.torch_generator)
             else:
                 pixel_values = torch.rand(3, self.image_size, self.image_size)
+        pixel_values = (pixel_values - 0.5) / 0.5
         if self.torch_generator is not None:
             label_tensor = torch.randint(
                 0,
@@ -147,7 +146,7 @@ class RandomImageDataset(Dataset):
         else:
             label_tensor = torch.randint(0, self.num_labels, (1,), dtype=torch.long)
         label = label_tensor.item()
-        return {"pixel_values": pixel_values, "labels": torch.tensor(label, dtype=torch.long)}
+        return {"x": pixel_values, "y": torch.tensor(label, dtype=torch.long)}
 
 
 def create_dataloader(

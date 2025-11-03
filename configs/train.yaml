@@ -7,6 +7,14 @@ runtime:
   # true 인 경우 CUDA 환경에서 torch.cuda.amp 를 활용하여 혼합 정밀 학습 수행
   amp: true
 
+data:
+  format: image              # image 또는 video
+  image_size: 224            # resize 크기
+  mean: [0.5, 0.5, 0.5]
+  std: [0.5, 0.5, 0.5]
+  video:
+    max_frames: 16           # uniform sampling 시 선택할 프레임 수
+
 paths:
   train_manifest: data/processed/train_manifest.csv   # 이미지/프레임 목록과 레이블이 매핑된 파일
   val_manifest: data/processed/val_manifest.csv       # 검증 세트 매니페스트

@@ -3,7 +3,7 @@ import math
 import sys
 from contextlib import nullcontext
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import yaml
@@ -12,7 +12,15 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.datamodules import create_dataloader
+from torch.utils.data import DataLoader
+
+from src.datamodules import (
+    ImagePreprocessConfig,
+    RandomImageDataset,
+    VideoPreprocessConfig,
+    create_image_dataloader,
+    create_video_dataloader,
+)
 from src.evaluation.metrics import macro_f1
 from src.models.loader import load_model_and_processor, resolve_model_source
 from src.training.trainer import ExponentialMovingAverage, Trainer
@@ -37,6 +45,83 @@ def load_yaml(path: str):
         return yaml.safe_load(handle)
 
 
+def build_dataloader(
+    manifest: Optional[str],
+    loader_cfg: Optional[Dict],
+    fallback_length: int,
+    dataset_kind: str,
+    image_size: int,
+    mean,
+    std,
+    max_frames: int,
+    num_labels: int,
+    seed: Optional[int],
+    path_column: Optional[str],
+    label_column: Optional[str],
+    shuffle_override: Optional[bool] = None,
+) -> DataLoader:
+    loader_cfg = loader_cfg or {}
+    dataset_kind = (dataset_kind or "image").lower()
+    batch_size = int(loader_cfg.get("batch_size", 32))
+    num_workers = int(loader_cfg.get("num_workers", 4))
+    shuffle = bool(loader_cfg.get("shuffle", dataset_kind == "image"))
+    pin_memory = bool(loader_cfg.get("pin_memory", False))
+    drop_last = bool(loader_cfg.get("drop_last", False))
+
+    if shuffle_override is not None:
+        shuffle = bool(shuffle_override)
+
+    manifest_path = Path(manifest) if manifest else None
+    if manifest_path and manifest_path.exists():
+        if dataset_kind == "video":
+            preprocess = VideoPreprocessConfig(
+                image_size=image_size,
+                mean=mean,
+                std=std,
+                max_frames=max_frames,
+            )
+            return create_video_dataloader(
+                manifest_path,
+                loader_cfg,
+                preprocess=preprocess,
+                path_column=path_column,
+                label_column=label_column,
+            )
+
+        preprocess = ImagePreprocessConfig(image_size=image_size, mean=mean, std=std)
+        return create_image_dataloader(
+            manifest_path,
+            loader_cfg,
+            preprocess=preprocess,
+            path_column=path_column,
+            label_column=label_column,
+        )
+
+    if manifest_path:
+        logger.warning(
+            "Manifest not found at %s; falling back to random tensors for %d samples.",
+            manifest_path,
+            fallback_length,
+        )
+
+    dataset = RandomImageDataset(
+        length=max(1, int(fallback_length)),
+        image_size=image_size,
+        num_labels=num_labels,
+        processor=None,
+        seed=seed,
+    )
+
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=drop_last,
+    )
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_yaml(args.config)
@@ -59,7 +144,7 @@ def main() -> None:
     model_source = resolve_model_source(model_cfg)
     logger.info("Loading model resources from %s", model_source)
 
-    model, processor, is_fallback = load_model_and_processor(model_cfg)
+    model, _processor, is_fallback = load_model_and_processor(model_cfg)
     if is_fallback:
         logger.warning("Using fallback simple model; pretrained weights were unavailable.")
 
@@ -70,6 +155,7 @@ def main() -> None:
     scheduler_cfg = cfg.get("scheduler", {})
     trainer_cfg = cfg.get("trainer", {})
     dataloader_cfg = cfg.get("dataloader", {})
+    data_cfg = cfg.get("data", {})
     runtime_paths = cfg.get("paths", {})
 
     epochs = max(1, int(trainer_cfg.get("epochs", trainer_cfg.get("max_epochs", 1))))
@@ -78,31 +164,51 @@ def main() -> None:
     log_interval = int(trainer_cfg.get("log_interval", 50))
 
     num_labels = getattr(model.config, "num_labels", 2)
-    image_size = getattr(model.config, "image_size", 224)
+    default_image_size = getattr(model.config, "image_size", 224)
+
+    data_format = str(data_cfg.get("format", "image")).lower()
+    image_size = int(data_cfg.get("image_size", default_image_size))
+    mean = data_cfg.get("mean", [0.5, 0.5, 0.5])
+    std = data_cfg.get("std", [0.5, 0.5, 0.5])
+    video_cfg = data_cfg.get("video", {})
+    max_frames = int(video_cfg.get("max_frames", 16))
+    path_column = data_cfg.get("path_column")
+    label_column = data_cfg.get("label_column")
 
     train_manifest = runtime_paths.get("train_manifest")
     val_manifest = runtime_paths.get("val_manifest")
     fallback_train = int(trainer_cfg.get("fallback_train_size", 128))
     fallback_val = int(trainer_cfg.get("fallback_val_size", 64))
 
-    train_loader = create_dataloader(
-        train_manifest,
-        processor,
-        dataloader_cfg.get("train", {}),
+    train_loader = build_dataloader(
+        manifest=train_manifest,
+        loader_cfg=dataloader_cfg.get("train", {}),
         fallback_length=fallback_train,
-        default_image_size=image_size,
-        default_num_labels=num_labels,
+        dataset_kind=data_format,
+        image_size=image_size,
+        mean=mean,
+        std=std,
+        max_frames=max_frames,
+        num_labels=num_labels,
         seed=seed,
+        path_column=path_column,
+        label_column=label_column,
     )
 
-    val_loader = create_dataloader(
-        val_manifest,
-        processor,
-        dataloader_cfg.get("val", {}),
+    val_loader = build_dataloader(
+        manifest=val_manifest,
+        loader_cfg=dataloader_cfg.get("val", {}),
         fallback_length=fallback_val,
-        default_image_size=image_size,
-        default_num_labels=num_labels,
+        dataset_kind=data_format,
+        image_size=image_size,
+        mean=mean,
+        std=std,
+        max_frames=max_frames,
+        num_labels=num_labels,
         seed=seed,
+        path_column=path_column,
+        label_column=label_column,
+        shuffle_override=False,
     )
 
     steps_per_epoch = math.ceil(len(train_loader) / grad_accum)
@@ -130,9 +236,10 @@ def main() -> None:
         with torch.no_grad(), context:
             for batch in loader:
                 batch = trainer.prepare_batch(batch)
-                labels = batch.pop("labels")
+                inputs = batch["x"]
+                labels = batch["y"]
                 with torch.cuda.amp.autocast(enabled=trainer.amp):
-                    outputs = trainer.model(**batch)
+                    outputs = trainer.model(pixel_values=inputs)
                     logits = outputs.logits if hasattr(outputs, "logits") else outputs
                     loss = criterion(logits, labels)
                 losses.append(float(loss.item()))
@@ -157,9 +264,10 @@ def main() -> None:
         running_loss = 0.0
         for step, batch in enumerate(train_loader, start=1):
             batch = trainer.prepare_batch(batch)
-            labels = batch.pop("labels")
+            inputs = batch["x"]
+            labels = batch["y"]
             with torch.cuda.amp.autocast(enabled=trainer.amp):
-                outputs = trainer.model(**batch)
+                outputs = trainer.model(pixel_values=inputs)
                 logits = outputs.logits if hasattr(outputs, "logits") else outputs
                 loss = criterion(logits, labels)
             loss_value = float(loss.item())
