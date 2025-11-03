@@ -1,0 +1,20 @@
+# Hugging Face 모델과 체크포인트 설정
+model:
+  name: "google/vit-base-patch16-224"
+  num_labels: 2
+  id2label:
+    0: Real
+    1: Fake
+  label2id:
+    Real: 0
+    Fake: 1
+
+checkpoint: model/vit-base-patch16-224
+# transformers 라이브러리에서 `from_pretrained`로 로드 가능한 경로 혹은 로컬 디렉터리
+# 예) 사전 학습 가중치 다운로드 후 `model/vit-base-patch16-224`에 저장
+
+feature_extractor:
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
+  size: 224
+  crop_size: 224
