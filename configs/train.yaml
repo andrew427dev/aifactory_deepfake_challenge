@@ -1,22 +1,48 @@
-# 학습 파이프라인 설정 (향후 실제 학습 루프 구현 시 참조)
+# 학습 파이프라인 설정 (GPU/CPU 런타임 제어 포함)
 seed: 42
+
+runtime:
+  # auto: CUDA 가용 시 자동으로 선택, cpu/cuda 로 강제 지정 가능
+  device: auto
+  # true 인 경우 CUDA 환경에서 torch.cuda.amp 를 활용하여 혼합 정밀 학습 수행
+  amp: true
+
+data:
+  format: image              # image 또는 video
+  image_size: 224            # resize 크기
+  mean: [0.5, 0.5, 0.5]
+  std: [0.5, 0.5, 0.5]
+  video:
+    max_frames: 16           # uniform sampling 시 선택할 프레임 수
 
 paths:
   train_manifest: data/processed/train_manifest.csv   # 이미지/프레임 목록과 레이블이 매핑된 파일
   val_manifest: data/processed/val_manifest.csv       # 검증 세트 매니페스트
   output_dir: experiments/exp001                      # 체크포인트 및 로그 저장 위치
+  log_dir: experiments/exp001/logs                    # (선택) 로그 저장 디렉터리
 
+# Trainer 블록은 더미 루프와 향후 실제 학습 루프 모두에서 공유됩니다.
 trainer:
-  epochs: 10
+  epochs: 1
   gradient_accumulation_steps: 1
-  precision: "amp"                                    # ['fp32', 'amp'] 중 선택
   clip_grad_norm: 1.0
   log_interval: 50
+  fallback_train_size: 128
+  fallback_val_size: 64
+
+# legacy 호환성을 위해 간단한 학습 파라미터를 중복 표기합니다.
+train_params:
+  batch_size: 32
+  num_workers: 8
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  epochs: 1
 
 optimizer:
   name: adamw
   lr: 5.0e-5
   weight_decay: 0.01
+  betas: [0.9, 0.999]
 
 scheduler:
   name: cosine
@@ -24,15 +50,18 @@ scheduler:
   min_lr: 1.0e-6
 
 ema:
-  enabled: false
+  enable: false
   decay: 0.999
 
+# DataLoader 설정은 scripts/train.py 의 더미 학습과 향후 실제 DataModule 에서 그대로 활용됩니다.
 dataloader:
   train:
     batch_size: 32
     num_workers: 8
     shuffle: true
+    pin_memory: true
   val:
     batch_size: 64
     num_workers: 8
     shuffle: false
+    pin_memory: true

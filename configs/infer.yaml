@@ -1,14 +1,18 @@
-# 추론 및 제출 파이프라인 설정
+# 추론 및 제출 파이프라인 설정 (GPU/CPU 런타임 제어 포함)
 output:
   submission_path: submission/submission.csv
+  probs_path: submission/probs.csv                # (선택) 확률 값 저장 경로
 
 input:
-  manifest: data/processed/val_manifest.csv     # (선택) 추론 대상 파일 목록. 없으면 디렉터리 탐색 사용
+  manifest: data/processed/val_manifest.csv       # (선택) 추론 대상 파일 목록. 없으면 디렉터리 탐색 사용
+  data_dir: data/processed/infer                  # (선택) manifest 가 없을 때 탐색할 디렉터리
 
 runtime:
-  device: cuda
+  device: auto  # auto, cuda, cpu 중 선택
+  amp: true
   batch_size: 64
   num_workers: 4
+  pin_memory: true
 
 video_aggregate:
   method: topk                                   # ['mean', 'median', 'topk'] 중 선택
@@ -17,3 +21,4 @@ video_aggregate:
 
 postprocess:
   threshold: 0.5                                 # 이미지 확률을 이진 라벨로 변환할 기준값
+  apply_softmax: true
