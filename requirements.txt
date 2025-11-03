@@ -1,0 +1,12 @@
+torch
+transformers
+opencv-python
+pandas
+numpy
+scikit-learn
+tqdm
+Pillow
+ffmpeg-python
+hydra-core
+matplotlib
+pyyaml

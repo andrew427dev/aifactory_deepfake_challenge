@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+.venv/
+.env
+.ipynb_checkpoints/
+
+# Data & Experiments
+data/
+!data/.gitkeep
+experiments/
+submission/*.csv
+model/*.safetensors
+wandb/
+mlruns/
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Logs & Temp
+logs/
+*.log
+*.tmp
+
+# Checkpoints & Outputs
+checkpoints/
+outputs/
+
+# Environment / Dependency
+.envrc
+*.egg-info/
