@@ -1,4 +1,4 @@
-# 추론 및 제출 파이프라인 설정
+# 추론 및 제출 파이프라인 설정 (GPU/CPU 런타임 제어 포함)
 output:
   submission_path: submission/submission.csv
 
@@ -6,7 +6,7 @@ input:
   manifest: data/processed/val_manifest.csv     # (선택) 추론 대상 파일 목록. 없으면 디렉터리 탐색 사용
 
 runtime:
-  device: auto
+  device: auto  # auto, cuda, cpu 중 선택
   amp: true
   batch_size: 64
   num_workers: 4

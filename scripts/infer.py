@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-config", default="configs/data.yaml", help="Path to data config")
     parser.add_argument("--checkpoint", default="experiments/exp001/best.ckpt", help="Model checkpoint path")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default=None, help="Override runtime.device")
+    parser.add_argument("--disable-amp", action="store_true", help="Force disable AMP regardless of config")
     return parser.parse_args()
 
 
@@ -40,9 +41,11 @@ def load_yaml(path: str):
 @torch.no_grad()
 def predict_image(model, processor, img_bgr, device, amp_enabled):
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    batch = processor(images=img_rgb, return_tensors="pt") if processor else {
-        "pixel_values": torch.from_numpy(img_rgb).permute(2, 0, 1).unsqueeze(0).float() / 255.0
-    }
+    batch = (
+        processor(images=img_rgb, return_tensors="pt")
+        if processor
+        else {"pixel_values": torch.from_numpy(img_rgb).permute(2, 0, 1).unsqueeze(0).float() / 255.0}
+    )
     if hasattr(batch, "to"):
         inputs = batch.to(device)
     else:
@@ -65,7 +68,10 @@ def main():
     device = resolve_device(device_pref)
     logger.info("Using device: %s", device.type)
 
-    amp_enabled = should_enable_amp(device, runtime_cfg.get("amp", True))
+    amp_requested = runtime_cfg.get("amp", True)
+    if args.disable_amp:
+        amp_requested = False
+    amp_enabled = should_enable_amp(device, amp_requested)
     logger.info("AMP enabled: %s", amp_enabled)
 
     model_source = resolve_model_source(model_cfg)

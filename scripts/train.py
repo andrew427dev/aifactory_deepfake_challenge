@@ -1,5 +1,4 @@
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -23,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="configs/train.yaml", help="Path to training config")
     parser.add_argument("--model-config", default="configs/model.yaml", help="Path to model config")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default=None, help="Override runtime.device")
+    parser.add_argument("--disable-amp", action="store_true", help="Force disable AMP regardless of config")
     return parser.parse_args()
 
 
@@ -44,6 +44,8 @@ def main() -> None:
     logger.info("Using device: %s", device.type)
 
     amp_requested = runtime_cfg.get("amp", True)
+    if args.disable_amp:
+        amp_requested = False
     amp_enabled = should_enable_amp(device, amp_requested)
     logger.info("AMP enabled: %s", amp_enabled)
 

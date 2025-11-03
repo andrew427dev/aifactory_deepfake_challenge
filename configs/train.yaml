@@ -1,9 +1,9 @@
-# 학습 파이프라인 설정 (향후 실제 학습 루프 구현 시 참조)
+# 학습 파이프라인 설정 (GPU/CPU 런타임 제어 포함)
 seed: 42
 
 runtime:
-  device: auto
-  amp: true
+  device: auto  # auto, cuda, cpu 중 선택
+  amp: true     # true면 CUDA 환경에서 mixed precision 활성화
 
 paths:
   train_manifest: data/processed/train_manifest.csv   # 이미지/프레임 목록과 레이블이 매핑된 파일
