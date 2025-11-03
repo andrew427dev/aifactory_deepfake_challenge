@@ -1,102 +1,104 @@
+# src/models/loader.py
 from __future__ import annotations
-
-import logging
-import os
-import types
+import logging, os
 from typing import Dict, Optional, Tuple
-
-import numpy as np
 import torch
-from transformers import AutoImageProcessor, AutoModelForImageClassification
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# transformers
+from transformers import AutoImageProcessor, AutoModelForImageClassification
+
+# timm
+try:
+    import timm
+except Exception:
+    timm = None
 
 class SimpleBatch(dict):
     def to(self, device: torch.device) -> "SimpleBatch":
-        return SimpleBatch({k: v.to(device) if hasattr(v, "to") else v for k, v in self.items()})
-
+        b = SimpleBatch({k: (v.to(device) if hasattr(v, "to") else v) for k, v in self.items()})
+        return b
 
 class SimpleImageProcessor:
-    def __init__(
-        self,
-        size: int = 224,
-        mean: Optional[list[float]] = None,
-        std: Optional[list[float]] = None,
-    ) -> None:
+    def __init__(self, size=224, mean=None, std=None):
         self.size = size
-        self.mean = torch.tensor(mean or [0.5, 0.5, 0.5]).view(3, 1, 1)
-        self.std = torch.tensor(std or [0.5, 0.5, 0.5]).view(3, 1, 1)
-
-    def __call__(self, images, return_tensors: str = "pt") -> SimpleBatch:
-        if return_tensors != "pt":  # pragma: no cover - defensive path
-            raise ValueError("SimpleImageProcessor only supports return_tensors='pt'")
-        if isinstance(images, np.ndarray):
-            array = images
-        else:
-            array = np.array(images)
-        resized = torch.from_numpy(array).permute(2, 0, 1).float() / 255.0
-        resized = torch.nn.functional.interpolate(
-            resized.unsqueeze(0), size=(self.size, self.size), mode="bilinear", align_corners=False
-        )[0]
-        normalized = (resized - self.mean) / self.std
-        return SimpleBatch({"pixel_values": normalized.unsqueeze(0)})
-
+        self.mean = torch.tensor(mean or [0.485,0.456,0.406]).view(3,1,1)
+        self.std  = torch.tensor(std  or [0.229,0.224,0.225]).view(3,1,1)
+    def __call__(self, img):
+        # img: PIL.Image (H,W,3)
+        import torchvision.transforms as T
+        tfm = T.Compose([
+            T.Resize(self.size),
+            T.CenterCrop(self.size),
+            T.ToTensor(),
+            T.Normalize(self.mean.flatten().tolist(), self.std.flatten().tolist()),
+        ])
+        out = tfm(img)
+        return {"pixel_values": out.unsqueeze(0)}  # BCHW
 
 class SimpleClassifier(torch.nn.Module):
-    def __init__(self, image_size: int = 224, num_labels: int = 2) -> None:
+    def __init__(self, image_size=224, num_labels=2):
         super().__init__()
-        hidden = 128
-        self.network = torch.nn.Sequential(
-            torch.nn.Flatten(),
-            torch.nn.Linear(3 * image_size * image_size, hidden),
+        c = 3
+        self.net = torch.nn.Sequential(
+            torch.nn.Conv2d(c, 32, 3, stride=2, padding=1),
             torch.nn.ReLU(),
-            torch.nn.Linear(hidden, num_labels),
+            torch.nn.Conv2d(32, 64, 3, stride=2, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.AdaptiveAvgPool2d(1),
         )
-        self.config = types.SimpleNamespace(
-            num_labels=num_labels,
-            id2label={i: str(i) for i in range(num_labels)},
-            label2id={str(i): i for i in range(num_labels)},
-        )
+        self.head = torch.nn.Linear(64, num_labels)
+    def forward(self, x):
+        z = self.net(x).flatten(1)
+        return self.head(z)
 
-    def forward(self, pixel_values: torch.Tensor):
-        logits = self.network(pixel_values)
-        return types.SimpleNamespace(logits=logits)
-
+def _enable_perf_flags():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    try:
+        torch.set_float32_matmul_precision("medium")
+    except Exception:
+        pass
 
 def resolve_model_source(model_cfg: Dict) -> str:
-    checkpoint_path = model_cfg.get("checkpoint")
-    if checkpoint_path:
-        checkpoint_dir = os.path.dirname(checkpoint_path) or checkpoint_path
-        if os.path.exists(checkpoint_dir):
-            return checkpoint_dir
-    model_section = model_cfg.get("model", {})
-    return model_section.get("name", checkpoint_path or "google/vit-base-patch16-224")
+    # 우선순위: model.checkpoint -> model.name
+    ckpt = model_cfg.get("checkpoint")
+    if ckpt and os.path.exists(ckpt):
+        return ckpt
+    return model_cfg.get("model", {}).get("name", "google/vit-base-patch16-224")
 
-
-def load_model_and_processor(model_cfg: Dict) -> Tuple[torch.nn.Module, Optional[object], bool]:
+def load_model_and_processor(model_cfg: Dict) -> Tuple[torch.nn.Module, object, bool]:
+    """
+    Returns: model, processor, is_fallback
+    """
+    _enable_perf_flags()
     model_source = resolve_model_source(model_cfg)
-    allow_remote = model_cfg.get("allow_remote_download", False)
-    try:
-        processor = AutoImageProcessor.from_pretrained(model_source, local_files_only=not allow_remote)
-        model = AutoModelForImageClassification.from_pretrained(
-            model_source,
-            num_labels=model_cfg.get("model", {}).get("num_labels"),
-            id2label=model_cfg.get("model", {}).get("id2label"),
-            label2id=model_cfg.get("model", {}).get("label2id"),
-            local_files_only=not allow_remote,
-        )
-        return model, processor, False
-    except Exception as exc:  # pragma: no cover - best effort fallback
-        logger.warning(
-            "Falling back to simple classifier because pretrained resources could not be loaded from %s: %s",
-            model_source,
-            exc,
-        )
-        image_size = model_cfg.get("feature_extractor", {}).get("size", 224)
-        mean = model_cfg.get("feature_extractor", {}).get("image_mean", [0.5, 0.5, 0.5])
-        std = model_cfg.get("feature_extractor", {}).get("image_std", [0.5, 0.5, 0.5])
-        num_labels = model_cfg.get("model", {}).get("num_labels", 2)
-        model = SimpleClassifier(image_size=image_size, num_labels=num_labels)
+    name = model_cfg.get("model", {}).get("name", "")
+    num_labels = int(model_cfg.get("model", {}).get("num_labels", 2))
+    feat = model_cfg.get("feature_extractor", {})
+    image_size = int(feat.get("size", 224))
+    mean = feat.get("image_mean", [0.485, 0.456, 0.406])
+    std  = feat.get("image_std",  [0.229, 0.224, 0.225])
+
+    # 1) timm 경로 (예: timm/efficientnet_b4)
+    if name.startswith("timm/"):
+        if timm is None:
+            raise ImportError("timm가 필요합니다. pip install timm")
+        timm_name = name.split("timm/")[-1]
+        model = timm.create_model(timm_name, pretrained=True, num_classes=num_labels)
         processor = SimpleImageProcessor(size=image_size, mean=mean, std=std)
-        return model, processor, True
+        return model, processor, False
+
+    # 2) transformers 경로 (예: google/vit-base-patch16-224)
+    try:
+        processor = AutoImageProcessor.from_pretrained(model_source)
+        model = AutoModelForImageClassification.from_pretrained(model_source, num_labels=num_labels)
+        return model, processor, False
+    except Exception as exc:
+        logger.warning("transformers 로드 실패(%s). fallback 간단분류기 사용.", exc)
+
+    # 3) fallback
+    model = SimpleClassifier(image_size=image_size, num_labels=num_labels)
+    processor = SimpleImageProcessor(size=image_size, mean=mean, std=std)
+    return model, processor, True
