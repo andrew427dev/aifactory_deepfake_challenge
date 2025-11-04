@@ -1,6 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Any, Mapping
 
 import torch
 
@@ -18,6 +19,18 @@ from src.utils.seed import set_seed  # noqa: E402
 logger = get_logger("validate")
 
 
+def require(cfg: Mapping[str, Any], path: str) -> Any:
+    keys = path.split(".")
+    current: Any = cfg
+    traversed: list[str] = []
+    for key in keys:
+        traversed.append(key)
+        if not isinstance(current, Mapping) or key not in current:
+            raise KeyError(f"Missing required config key: {'.'.join(traversed)}")
+        current = current[key]
+    return current
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validation entry point")
     parser.add_argument("--config", default="configs/train.yaml", help="Path to training config")
@@ -25,24 +38,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", default="experiments/exp001/best.ckpt", help="Checkpoint to evaluate")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default=None, help="Override runtime.device")
     parser.add_argument("--disable-amp", action="store_true", help="Force disable AMP regardless of config")
+    parser.add_argument("--data-config", default="configs/data.yaml", help="Shared data configuration")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    cfg = load_yaml(args.config)
+    cfg = load_yaml(args.config) or {}
     model_cfg = load_yaml(args.model_config)
+    data_cfg = load_yaml(args.data_config) or {}
 
     seed = int(cfg.get("seed", 42))
     set_seed(seed)
 
-    runtime_cfg = cfg.get("runtime", {})
-    device_pref = args.device if args.device is not None else runtime_cfg.get("device", "auto")
+    runtime_cfg = require(cfg, "runtime")
+    device_pref = args.device if args.device is not None else str(require(runtime_cfg, "device"))
     device = resolve_device(device_pref)
     logger.info("Using device: %s", device.type)
 
-    amp_requested = runtime_cfg.get("amp", True)
+    amp_requested = bool(require(runtime_cfg, "amp"))
     if args.disable_amp:
         amp_requested = False
     amp_enabled = should_enable_amp(device, amp_requested)
@@ -64,21 +79,22 @@ def main() -> None:
 
     trainer_cfg = cfg.get("trainer", {})
     dataloader_cfg = cfg.get("dataloader", {})
-    data_cfg = cfg.get("data", {})
+    train_data_cfg = cfg.get("data", {})
     runtime_paths = cfg.get("paths", {})
 
-    data_format = str(data_cfg.get("format", "image")).lower()
-    image_size = int(data_cfg.get("image_size", getattr(model.config, "image_size", 224)))
-    mean = data_cfg.get("mean", [0.5, 0.5, 0.5])
-    std = data_cfg.get("std", [0.5, 0.5, 0.5])
-    video_cfg = data_cfg.get("video", {})
-    max_frames = int(video_cfg.get("max_frames", 16))
-    path_column = data_cfg.get("path_column")
-    label_column = data_cfg.get("label_column")
+    data_format = str(train_data_cfg.get("format", "image")).lower()
+    normalize_cfg = require(data_cfg, "normalize")
+    image_size = int(require(data_cfg, "img_size"))
+    mean = list(require(normalize_cfg, "mean"))
+    std = list(require(normalize_cfg, "std"))
+    max_frames = int(require(data_cfg, "max_frames"))
+    path_column = train_data_cfg.get("path_column")
+    label_column = train_data_cfg.get("label_column")
 
     val_manifest = runtime_paths.get("val_manifest")
     fallback_val = int(trainer_cfg.get("fallback_val_size", 64))
-    num_labels = getattr(model.config, "num_labels", 2)
+    model_config = getattr(model, "config", None)
+    num_labels = getattr(model_config, "num_labels", 2) if model_config is not None else 2
 
     val_loader = build_dataloader(
         manifest=val_manifest,
