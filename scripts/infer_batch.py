@@ -15,6 +15,7 @@ from src.models.loader import load_model_and_processor
 from src.utils.device import resolve_device, should_enable_amp
 from src.utils.logging import get_logger
 from src.inference.aggregate_video import aggregate_probs
+from src.inference.postprocess import binarize
 
 logger = get_logger("infer_batch")
 
@@ -72,8 +73,10 @@ def main():
     cfg = yaml.safe_load(open(args.config))
     mcfg = yaml.safe_load(open(args.model_config))
 
-    out_submission = Path(cfg["output"]["submission_path"])
-    out_probs      = Path(cfg["output"].get("probs_path", "submission/probs.csv"))
+    output_cfg = cfg.get("output", {})
+    out_submission = Path(output_cfg["submission_path"])
+    probs_value = output_cfg.get("probs_path")
+    out_probs = Path(probs_value) if probs_value else None
     manifest       = cfg["input"].get("manifest")
     data_dir       = cfg["input"].get("data_dir")
 
@@ -115,7 +118,7 @@ def main():
                 continue
             videos[str(f)] = frames
 
-    rows, prob_rows = [], []
+    rows, score_rows = [], []
     pil_to_tensor = make_pil_loader(processor)
 
     def run_model_on_batch(x):
@@ -146,8 +149,10 @@ def main():
         x = torch.cat(tensors, dim=0).to(device, non_blocking=True)
         probs = run_model_on_batch(x).tolist()
         for p, pr in zip(chunk, probs):
-            rows.append({"filename": p.name, "label": int(pr >= threshold)})
-            prob_rows.append({"filename": p.name, "prob": float(pr)})
+            label = binarize(pr, threshold)
+            rows.append({"filename": p.name, "label": int(label)})
+            if out_probs is not None:
+                score_rows.append({"video_id": p.name, "score": float(pr)})
         i += bsz
 
     # ----- 비디오(프레임) 일괄 추론 -----
@@ -164,15 +169,21 @@ def main():
             chunk_probs = run_model_on_batch(x).tolist()
             probs.extend(chunk_probs)
             j += bsz
-        label = aggregate_probs(probs, method=vid_method, topk=vid_topk, threshold=threshold)
+        score = aggregate_probs(probs, method=vid_method, topk=vid_topk)
+        label = binarize(score, threshold)
         rows.append({"filename": Path(vpath).name, "label": int(label)})
-        prob_rows.append({"filename": Path(vpath).name, "prob": float(sum(probs)/len(probs))})
+        if out_probs is not None:
+            score_rows.append({"video_id": Path(vpath).name, "score": float(score)})
 
     out_submission.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows, columns=["filename","label"]).to_csv(out_submission, index=False)
-    pd.DataFrame(prob_rows, columns=["filename","prob"]).to_csv(out_probs, index=False)
+
+    if out_probs is not None:
+        out_probs.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(score_rows, columns=["video_id", "score"]).to_csv(out_probs, index=False)
+        logger.info("Saved scores => %s", out_probs)
+
     logger.info("Saved submission => %s", out_submission)
-    logger.info("Saved probs => %s", out_probs)
 
 if __name__ == "__main__":
     main()
