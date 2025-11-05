@@ -71,12 +71,14 @@ class VideoDataset(Dataset):
             )
 
         self.root_dir = self.manifest_path.parent
-        self.samples: List[Tuple[Path, int]] = []
+        self.samples: List[Tuple[Path, int, str]] = []
         for _, row in self.frame.iterrows():
-            rel_path = Path(str(row[self.path_column]))
+            raw_path = str(row[self.path_column])
+            rel_path = Path(raw_path)
             full_path = rel_path if rel_path.is_absolute() else self.root_dir / rel_path
             label_value = self._encode_label(row[self.label_column])
-            self.samples.append((full_path, label_value))
+            identifier = str(rel_path.name if rel_path.name else rel_path)
+            self.samples.append((full_path, label_value, identifier))
 
         if self.preprocess.max_frames <= 0:
             raise ValueError("max_frames must be positive")
@@ -143,13 +145,17 @@ class VideoDataset(Dataset):
         return (tensor - self.mean) / self.std
 
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
-        path, label = self.samples[index]
+        path, label, identifier = self.samples[index]
         frames = self._read_video(path)
         indices = self._sample_indices(len(frames))
         selected = [frames[int(i)] for i in indices]
         stacked = torch.stack([self._normalize_frame(frame) for frame in selected], dim=0)
         pooled = stacked.mean(dim=0)
-        return {"x": pooled, "y": torch.tensor(label, dtype=torch.long)}
+        return {
+            "x": pooled,
+            "y": torch.tensor(label, dtype=torch.long),
+            "filename": identifier,
+        }
 
 
 def create_video_dataloader(

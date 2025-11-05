@@ -146,7 +146,11 @@ class RandomImageDataset(Dataset):
         else:
             label_tensor = torch.randint(0, self.num_labels, (1,), dtype=torch.long)
         label = label_tensor.item()
-        return {"x": pixel_values, "y": torch.tensor(label, dtype=torch.long)}
+        return {
+            "x": pixel_values,
+            "y": torch.tensor(label, dtype=torch.long),
+            "filename": f"random_{index:05d}",
+        }
 
 
 def create_dataloader(

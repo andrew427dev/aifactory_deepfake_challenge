@@ -87,12 +87,14 @@ class ImageDataset(Dataset):
             )
 
         self.root_dir = self.manifest_path.parent
-        self.samples: List[Tuple[Path, int]] = []
+        self.samples: List[Tuple[Path, int, str]] = []
         for _, row in self.frame.iterrows():
-            rel_path = Path(str(row[self.path_column]))
+            raw_path = str(row[self.path_column])
+            rel_path = Path(raw_path)
             full_path = rel_path if rel_path.is_absolute() else self.root_dir / rel_path
             label_value = self._encode_label(row[self.label_column])
-            self.samples.append((full_path, label_value))
+            identifier = str(rel_path.name if rel_path.name else rel_path)
+            self.samples.append((full_path, label_value, identifier))
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -115,10 +117,14 @@ class ImageDataset(Dataset):
             return img.convert("RGB")
 
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
-        path, label = self.samples[index]
+        path, label, identifier = self.samples[index]
         image_rgb = self._load_image(path)
         tensor = _normalize_image(image_rgb, self.preprocess)
-        return {"x": tensor, "y": torch.tensor(label, dtype=torch.long)}
+        return {
+            "x": tensor,
+            "y": torch.tensor(label, dtype=torch.long),
+            "filename": identifier,
+        }
 
 
 def create_image_dataloader(

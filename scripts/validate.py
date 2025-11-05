@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 import torch
 from PIL import Image
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -41,6 +42,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--disable-amp", action="store_true", help="Force disable AMP regardless of config")
     parser.add_argument("--data-config", default="configs/data.yaml", help="Shared data configuration")
     parser.add_argument("--smoke-test", action="store_true", help="Run a lightweight model/processor smoke test and exit")
+    parser.add_argument("--fold", type=int, default=None, help="Optional fold index for CV logging")
+    parser.add_argument(
+        "--save-oof",
+        default="submission/oof.csv",
+        help="Path to save out-of-fold predictions [filename, prob, label_true]",
+    )
     return parser.parse_args()
 
 
@@ -191,23 +198,55 @@ def main() -> None:
 
     validator = Validator(model=model, device=device, amp=amp_enabled, logger=logger)
 
-    epochs = max(1, int(trainer_cfg.get("epochs", trainer_cfg.get("max_epochs", 1))))
-    best_result = None
+    result, details = validator.evaluate(val_loader, return_details=True)
+    logger.info("Validation completed | loss=%.4f | macro_f1=%.4f", result.loss, result.macro_f1)
+    print(f"Validation: loss={result.loss:.4f} macro_f1={result.macro_f1:.4f}")
 
-    for epoch in range(1, epochs + 1):
-        result = validator.evaluate(val_loader)
-        logger.info(
-            "Epoch %d validation | loss=%.4f | macro_f1=%.4f",
-            epoch,
-            result.loss,
-            result.macro_f1,
+    filenames = details.get("filenames", [])
+    probs = details.get("probs", [])
+    labels_true = details.get("labels", [])
+
+    if len(filenames) != len(probs) or len(probs) != len(labels_true):
+        raise RuntimeError(
+            "Mismatch between filenames, probabilities, and labels lengths for OOF export."
         )
-        print(f"Epoch {epoch}: loss={result.loss:.4f} macro_f1={result.macro_f1:.4f}")
-        if best_result is None or result.macro_f1 > best_result.macro_f1:
-            best_result = result
 
-    if best_result is not None:
-        logger.info("Best Macro F1 across epochs: %.4f", best_result.macro_f1)
+    oof_path = Path(args.save_oof)
+    oof_path.parent.mkdir(parents=True, exist_ok=True)
+    oof_df = pd.DataFrame(
+        {
+            "filename": [str(name) for name in filenames],
+            "prob": [float(p) for p in probs],
+            "label_true": [int(lbl) for lbl in labels_true],
+        }
+    )
+    oof_df.to_csv(oof_path, index=False)
+    logger.info("Saved OOF predictions => %s", oof_path)
+
+    fold_idx = 0 if args.fold is None else int(args.fold)
+    cv_path = Path("reports/cv_results.csv")
+    cv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if cv_path.exists():
+        cv_df = pd.read_csv(cv_path)
+        if "fold" in cv_df.columns:
+            cv_df = cv_df[cv_df["fold"] != fold_idx]
+        else:
+            cv_df = pd.DataFrame(columns=["fold", "macro_f1"])
+    else:
+        cv_df = pd.DataFrame(columns=["fold", "macro_f1"])
+
+    updated = pd.concat(
+        [cv_df, pd.DataFrame([{"fold": fold_idx, "macro_f1": float(result.macro_f1)}])],
+        ignore_index=True,
+    )
+    updated = updated.sort_values("fold").reset_index(drop=True)
+    updated["mean_macro_f1"] = updated["macro_f1"].mean() if not updated.empty else float("nan")
+    updated["std_macro_f1"] = (
+        updated["macro_f1"].std(ddof=0) if len(updated) > 0 else float("nan")
+    )
+    updated.to_csv(cv_path, index=False)
+    logger.info("Saved CV results => %s", cv_path)
 
 
 if __name__ == "__main__":
