@@ -1,9 +1,10 @@
-import logging
 from typing import Optional
 
 import torch
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+
+logger = get_logger("device")
 
 
 def resolve_device(device_preference: Optional[str] = None) -> torch.device:
@@ -29,3 +30,27 @@ def resolve_device(device_preference: Optional[str] = None) -> torch.device:
 def should_enable_amp(device: torch.device, requested: bool) -> bool:
     """Determine if AMP should be enabled for the given device."""
     return bool(requested) and device.type == "cuda"
+
+
+_CHANNELS_LAST_ENABLED: bool = False
+
+
+def enable_perf_flags(channels_last: bool, cudnn_benchmark: bool) -> None:
+    """Configure global performance flags for the current process."""
+
+    global _CHANNELS_LAST_ENABLED
+
+    torch.backends.cudnn.benchmark = bool(cudnn_benchmark)
+    logger.info("cuDNN benchmark: %s", torch.backends.cudnn.benchmark)
+
+    _CHANNELS_LAST_ENABLED = bool(channels_last)
+    if _CHANNELS_LAST_ENABLED:
+        logger.info("Tensor memory format: channels_last (apply when moving tensors to device)")
+    else:
+        logger.info("Tensor memory format: contiguous")
+
+
+def channels_last_enabled() -> bool:
+    """Return whether channels-last tensors were requested via enable_perf_flags."""
+
+    return _CHANNELS_LAST_ENABLED

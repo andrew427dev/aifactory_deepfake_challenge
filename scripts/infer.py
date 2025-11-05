@@ -27,7 +27,7 @@ if str(ROOT) not in sys.path:
 from src.models.loader import load_model_and_processor
 from src.inference.aggregate_video import aggregate_probs
 from src.inference.postprocess import binarize
-from src.utils.device import resolve_device, should_enable_amp
+from src.utils.device import enable_perf_flags, resolve_device, should_enable_amp
 from src.utils.logging import get_logger
 
 logger = get_logger("infer")
@@ -89,8 +89,17 @@ def forward_logits(model, x: torch.Tensor) -> torch.Tensor:
 
 
 @torch.inference_mode()
-def predict_pil(model, processor, device, amp: bool, img_pil: Image.Image) -> float:
+def predict_pil(
+    model,
+    processor,
+    device,
+    amp: bool,
+    channels_last: bool,
+    img_pil: Image.Image,
+) -> float:
     x = load_image_to_tensor(img_pil, processor).to(device)
+    if channels_last and x.ndim == 4:
+        x = x.to(memory_format=torch.channels_last)
     with torch.autocast(device_type=device.type, enabled=amp):
         logits = forward_logits(model, x)
     if logits.ndim == 2 and logits.shape[1] == 2:
@@ -174,6 +183,8 @@ def main() -> None:
     batch_size = int(require(runtime_cfg, "batch_size"))
     num_workers = int(require(runtime_cfg, "num_workers"))
     pin_memory = bool(require(runtime_cfg, "pin_memory"))
+    channels_last = bool(require(runtime_cfg, "channels_last"))
+    cudnn_benchmark = bool(require(runtime_cfg, "cudnn_benchmark"))
 
     post_cfg = require(cfg, "postprocess")
     threshold_cfg = float(require(post_cfg, "threshold"))
@@ -205,6 +216,8 @@ def main() -> None:
             "batch_size": batch_size,
             "num_workers": num_workers,
             "pin_memory": pin_memory,
+            "channels_last": channels_last,
+            "cudnn_benchmark": cudnn_benchmark,
         },
         "postprocess": {"threshold": threshold},
         "data": {
@@ -223,6 +236,8 @@ def main() -> None:
     logger.info("Using device: %s", device.type)
     amp = should_enable_amp(device, amp_requested)
     logger.info("AMP enabled: %s", amp)
+
+    enable_perf_flags(channels_last=channels_last, cudnn_benchmark=cudnn_benchmark)
 
     model_cfg = load_yaml(args.model_config)
     model, processor, _ = load_model_and_processor(model_cfg)
@@ -249,7 +264,7 @@ def main() -> None:
 
         if ext in SUPPORTED_IMG:
             img = Image.open(fpath).convert("RGB")
-            score = predict_pil(model, processor, device, amp, img)
+            score = predict_pil(model, processor, device, amp, channels_last, img)
             label = binarize(score, threshold)
             rows.append({"filename": fname, "label": int(label)})
             if args.save_probs or out_probs:
@@ -264,11 +279,14 @@ def main() -> None:
                 probs = []
                 for fp in frame_candidates:
                     img = Image.open(fp).convert("RGB")
-                    p = predict_pil(model, processor, device, amp, img)
+                    p = predict_pil(model, processor, device, amp, channels_last, img)
                     probs.append(p)
             else:
                 frames = decode_video_frames(fpath, sample_fps, max_frames)
-                probs = [predict_pil(model, processor, device, amp, frame) for frame in frames]
+                probs = [
+                    predict_pil(model, processor, device, amp, channels_last, frame)
+                    for frame in frames
+                ]
 
             if len(probs) == 0:
                 logger.warning("No frames to infer: %s", fpath)

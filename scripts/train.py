@@ -24,7 +24,7 @@ from src.datamodules import (
 from src.evaluation.metrics import macro_f1
 from src.models.loader import load_model_and_processor, resolve_model_source
 from src.training.trainer import ExponentialMovingAverage, Trainer
-from src.utils.device import resolve_device, should_enable_amp
+from src.utils.device import enable_perf_flags, resolve_device, should_enable_amp
 from src.utils.logging import get_logger
 from src.utils.seed import set_seed
 
@@ -140,6 +140,10 @@ def main() -> None:
         amp_requested = False
     amp_enabled = should_enable_amp(device, amp_requested)
     logger.info("AMP enabled: %s", amp_enabled)
+
+    channels_last = bool(runtime_cfg.get("channels_last", False))
+    cudnn_benchmark = bool(runtime_cfg.get("cudnn_benchmark", False))
+    enable_perf_flags(channels_last=channels_last, cudnn_benchmark=cudnn_benchmark)
 
     model_source = resolve_model_source(model_cfg)
     logger.info("Loading model resources from %s", model_source)

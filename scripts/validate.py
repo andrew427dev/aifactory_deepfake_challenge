@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 from scripts.train import build_dataloader, load_yaml  # noqa: E402
 from src.evaluation.validator import Validator  # noqa: E402
 from src.models.loader import load_model_and_processor, resolve_model_source  # noqa: E402
-from src.utils.device import resolve_device, should_enable_amp  # noqa: E402
+from src.utils.device import enable_perf_flags, resolve_device, should_enable_amp  # noqa: E402
 from src.utils.logging import get_logger  # noqa: E402
 from src.utils.seed import set_seed  # noqa: E402
 
@@ -129,6 +129,10 @@ def main() -> None:
         amp_requested = False
     amp_enabled = should_enable_amp(device, amp_requested)
     logger.info("AMP enabled: %s", amp_enabled)
+
+    channels_last = bool(runtime_cfg.get("channels_last", False))
+    cudnn_benchmark = bool(runtime_cfg.get("cudnn_benchmark", False))
+    enable_perf_flags(channels_last=channels_last, cudnn_benchmark=cudnn_benchmark)
 
     model_source = resolve_model_source(model_cfg)
     logger.info("Loading model resources from %s", model_source)

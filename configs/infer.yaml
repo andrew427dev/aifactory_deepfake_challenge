@@ -13,6 +13,8 @@ runtime:
   batch_size: 64
   num_workers: 8   # 디스크 로딩 스레드 수
   pin_memory: true
+  channels_last: true
+  cudnn_benchmark: true
 
 video_aggregate:
   method: topk                                   # ['mean', 'median', 'topk'] 중 선택
